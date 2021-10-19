@@ -1,0 +1,381 @@
+
+"""
+Calculating daily expected ranges for variety of macro assets. Uses STARC bands
+and ATR.
+
+@author: dsugasa
+"""
+
+
+# %%
+
+import pandas as pd
+from tia.bbg import LocalTerminal
+import numpy as np
+from datetime import datetime
+from operator import itemgetter
+import plotly
+import chart_studio.plotly as py  # for plotting
+import plotly.graph_objs as go
+import chart_studio.dashboard_objs as dashboard
+import plotly.figure_factory as ff
+from pathlib import Path
+import dotenv #can't remember the exact syntax
+
+import plotly.io as pio
+
+pio.templates.default = "none"
+pio.renderers.default = "jupyterlab"
+
+output_dir = Path(r"*****\Images\Range")
+output_dir.mkdir(parents=True, exist_ok=True)
+
+output_dir2 = Path(r"*****\Images\Expected_Range")
+output_dir2.mkdir(parents=True, exist_ok=True)
+
+output_dir3 = Path(r"*****\Images\Range_Graphs")
+output_dir3.mkdir(parents=True, exist_ok=True)
+
+
+# set the script start time
+start_time = datetime.now()
+
+# set dates, securities, and fields
+start_date = "01/01/2005"
+end_date = "{:%m/%d/%Y}".format(datetime.now())
+month = datetime.now().month
+day = datetime.now().day
+year = datetime.now().year
+hour = datetime.now().hour
+
+IDs = [
+    "DXY Index",
+    "SPX Index",
+    "CL1 Comdty",
+    "NDX Index",
+    "VXN Index",
+    "OVX Index",
+    "RTY Index",
+    "USGG10YR Index",
+    "VIX Index",
+    "BCOM Index",
+    "HG1 Comdty",
+    "XAU Curncy",
+    "EURUSD Curncy",
+    "GBPUSD Curncy",
+    "USDJPY Curncy",
+    "HYG US Equity",
+    "ITRXEXE Index",
+    "IBOXHYSE Index",
+    "GECU10YR Index",
+    "SCO1 Comdty",
+    "XBTUSD Curncy",
+    "ES1 Index",
+    "VG1 Index",
+    "MTUM US Equity",
+    "IWMO LN Equity",
+    "IEMO LN Equity",
+    "IHYG LN Equity",
+    "NQ1 Index",
+    "XETUSD Index"
+    # "LP01TREU Index"
+]
+
+fields = ["LAST PRICE", "HIGH", "LOW"]
+
+data_call = LocalTerminal.get_historical(
+    IDs, fields, start_date, end_date, period="DAILY"
+)
+data_dict = data_call.as_map()
+
+
+spread_figure_dict = {}  # dict of original dataframes per ID
+range_figure_dict = {}  # list of lists for data matrix
+
+periods = 5
+sds = 1.05
+ATR_Period = 15
+
+for name in data_dict.keys():
+    data_dict[name]["Prev Close"] = data_dict[name]["LAST PRICE"].shift()
+    data_dict[name]["ActR"] = abs(
+        data_dict[name]["HIGH"] - data_dict[name]["LOW"]
+    )  # define actual trading range
+    data_dict[name]["TRHigh"] = abs(
+        data_dict[name]["HIGH"] - data_dict[name]["Prev Close"]
+    )  # absolute value of diff prev C to H
+    data_dict[name]["TRLow"] = abs(
+        data_dict[name]["LOW"] - data_dict[name]["Prev Close"]
+    )  # absolute value of data_diff prev C to L
+    data_dict[name]["True Range"] = data_dict[name][["ActR", "TRHigh", "TRLow"]].apply(
+        max, axis=1
+    )
+    # Create STARC Bands
+
+    data_dict[name]["ATR_E"] = data_dict[name]["True Range"].ewm(span=ATR_Period).mean()
+    data_dict[name]["MA_E"] = data_dict[name]["LAST PRICE"].ewm(span=periods).mean()
+    data_dict[name]["UB"] = data_dict[name]["MA_E"] + (data_dict[name]["ATR_E"] * sds)
+    data_dict[name]["LB"] = data_dict[name]["MA_E"] - (data_dict[name]["ATR_E"] * sds)
+    data_dict[name]["STARCWidth"] = data_dict[name]["UB"] - data_dict[name]["LB"]
+    data_dict[name]["STARC%"] = (
+        (data_dict[name]["LAST PRICE"] - data_dict[name]["LB"])
+        / data_dict[name]["STARCWidth"]
+    ) * 100
+    data_dict[name]["Spread%"] = (
+        data_dict[name]["STARCWidth"] / data_dict[name]["LAST PRICE"]
+    )
+
+    # create graphs of spread width
+    trace1 = go.Bar(
+        x=data_dict[name].index,
+        y=data_dict[name]["Spread%"].values,
+        opacity=0.75,
+        name="RangeWidth",
+        marker=dict(color="#003663", line=dict(color="#003663", width=0.5)),
+    )
+    # dash = 'dash')
+    # xbins = dict(size=0.25)
+
+    data = [trace1]
+    layout = go.Layout(
+        # barmode='overlay',
+        title=f"{name} Normalized Spread",
+        xaxis=dict(title="Date"),
+        yaxis=dict(title="Spread%"),
+        annotations=[
+            dict(
+                text="Source: Bloomberg",
+                x=-0.05,
+                y=-0.20,
+                showarrow=False,
+                opacity=0.4,
+                xref="paper",
+                yref="paper",
+            )
+        ],
+        margin=go.layout.Margin(
+            l=30,  # left margin
+            r=0,  # right margin
+            b=0,  # bottom margin
+            t=30,  # top margin
+        ),
+        legend=dict(
+            orientation="h",
+            x=0.35,
+            y=-0.15
+            # xanchor = 'center',
+            # yanchor = 'bottom')
+        ),
+        # yaxis2 = dict(
+        #         title = 'Spread',
+        #         overlaying = 'y',
+        #         side = 'right'),
+    )
+
+    # group_labels = ['one_day_moves']
+    fig = go.Figure(data=data, layout=layout)
+    fig.write_image(fr"{output_dir}\{name}_range.png")
+    fig.write_html(fr"{output_dir}\{name}_range.html")
+    spread_figure_dict[name] = fig
+
+    graph_window = 45
+    """Create Range Graphs"""
+    trace2 = go.Scatter(
+        x=data_dict[name].tail(graph_window).index,
+        y=data_dict[name]["LAST PRICE"].tail(graph_window).values,
+        opacity=0.75,
+        name="Last Price",
+    )
+
+    trace3 = go.Scatter(
+        x=data_dict[name].tail(graph_window).index,
+        y=data_dict[name]["UB"].tail(graph_window).values,
+        opacity=0.75,
+        name="Upper Bound",
+        line=dict(dash="dash", width=1.5),
+    )
+
+    trace4 = go.Scatter(
+        x=data_dict[name].tail(graph_window).index,
+        y=data_dict[name]["LB"].tail(graph_window).values,
+        opacity=0.75,
+        name="Lower Bound",
+        line=dict(dash="dash", width=1.5),
+    )
+
+    data = [trace2, trace3, trace4]
+    layout = go.Layout(
+        # barmode='overlay',
+        title=f"{name} Spread",
+        xaxis=dict(title="Date"),
+        yaxis=dict(title="Price"),
+        annotations=[
+            dict(
+                text="Source: Bloomberg",
+                x=-0.05,
+                y=-0.20,
+                showarrow=False,
+                opacity=0.4,
+                xref="paper",
+                yref="paper",
+            )
+        ],
+        margin=go.layout.Margin(
+            l=30,  # left margin
+            r=0,  # right margin
+            b=0,  # bottom margin
+            t=30,  # top margin
+        ),
+        legend=dict(
+            orientation="v",
+            # x = 0.35,
+            # y = -0.15
+            # xanchor = 'center',
+            # yanchor = 'bottom')
+        ),
+    )
+
+    fig = go.Figure(data=data, layout=layout)
+    fig.write_image(fr"{output_dir3}\{name}_range_graph.png")
+    fig.write_html(fr"{output_dir3}\{name}_range_graph.html")
+    range_figure_dict[name] = fig
+
+    data_dict[name]["MA_30"] = data_dict[name]["LAST PRICE"].ewm(span=30).mean()
+    data_dict[name]["MA_50"] = data_dict[name]["LAST PRICE"].ewm(span=50).mean()
+    data_dict[name]["MA_200"] = data_dict[name]["LAST PRICE"].ewm(span=200).mean()
+    data_dict[name]["Signal30"] = data_dict[name].apply(
+        lambda x: "Long" if x["LAST PRICE"] > x["MA_30"] else "Short", axis=1
+    )
+    data_dict[name]["Signal50"] = data_dict[name].apply(
+        lambda x: "Long" if x["LAST PRICE"] > x["MA_50"] else "Short", axis=1
+    )
+    data_dict[name]["Signal200"] = data_dict[name].apply(
+        lambda x: "Long" if x["LAST PRICE"] > x["MA_200"] else "Short", axis=1
+    )
+    data_dict[name]["%30"] = (
+        (data_dict[name]["LAST PRICE"] - data_dict[name]["MA_30"])
+        / data_dict[name]["LAST PRICE"]
+        * 100
+    )
+    data_dict[name]["%50"] = (
+        (data_dict[name]["LAST PRICE"] - data_dict[name]["MA_50"])
+        / data_dict[name]["LAST PRICE"]
+        * 100
+    )
+    data_dict[name]["%200"] = (
+        (data_dict[name]["LAST PRICE"] - data_dict[name]["MA_200"])
+        / data_dict[name]["LAST PRICE"]
+        * 100
+    )
+
+header_list = [
+    "Ticker",
+    "Last Price",
+    "Lower Bound",
+    "Upper Bound",
+    "Percentile",
+    "Signal 30",
+    "Signal 50",
+    "Signal 200",
+    "% From 50d",
+    "% From 200d",
+]
+
+header_dict = {
+    "values": header_list,
+    "fill_color": "#003663",
+    "line_color": "#003663",
+    "align": ["left", "center"],
+    "font": {"color": "white"},
+    "height": 30,
+}
+
+odd_color = "white"
+even_color = "lightgrey"
+color_list = [
+    odd_color if (i % 2) == 0 else even_color for i in range(len(IDs))
+]  # sort by percentage
+
+cells = [
+    [i for i in data_dict.keys()],
+    [data_dict[i]["LAST PRICE"][-1] for i in data_dict.keys()],
+    [data_dict[i]["LB"][-1] for i in data_dict.keys()],
+    [data_dict[i]["UB"][-1] for i in data_dict.keys()],
+    [data_dict[i]["STARC%"][-1] / 100 for i in data_dict.keys()],
+    [data_dict[i]["Signal30"][-1] for i in data_dict.keys()],
+    [data_dict[i]["Signal50"][-1] for i in data_dict.keys()],
+    [data_dict[i]["Signal200"][-1] for i in data_dict.keys()],
+    [data_dict[i]["%50"][-1] / 100 for i in data_dict.keys()],
+    [data_dict[i]["%200"][-1] / 100 for i in data_dict.keys()],
+]
+
+cell_frame = pd.DataFrame(cells).T.sort_values(4).T
+
+cell_dict = {
+    "values": cell_frame,
+    "align": "right",
+    "fill_color": [color_list * len(header_list)],
+    "align": ["left", "center"],
+    "height": 25,
+}
+
+layout = go.Layout(
+    margin=go.layout.Margin(
+        l=10,  # left margin
+        r=0,  # right margin
+        b=0,  # bottom margin
+        t=5,  # top margin
+    )
+)
+
+trace = go.Table(columnwidth=[60, 40], header=header_dict, cells=cell_dict)
+trace.cells.format = [
+    [None],
+    [".2f"],
+    [".2f"],
+    [".2f"],
+    [".2%"],
+    [None],
+    [None],
+    [None],
+    [".2%"],
+    [".2%"],
+]
+fig = go.Figure(data=[trace], layout=layout)
+fig.update_layout(width=2000, height=1000)
+fig.show()
+
+import datapane as dp
+your_token = env_token
+dp.login(token=your_token ) 
+
+
+full_report = dp.Report(
+    dp.Page(
+        #title = "Daily Expected Ranges: Macro Assets",
+        
+        blocks =[
+            dp.Group(
+        dp.Text("Daily Expected Ranges: Macro Assets"),
+        #dp.File(file=r"*****/path"),
+        #columns=2),
+        
+        fig,
+        dp.Group(
+            range_figure_dict["ES1 Index"],
+            range_figure_dict["USGG10YR Index"],
+            columns=2,
+        ),
+        ]),
+    type=dp.ReportType.DASHBOARD
+    # dp.Text('Table of Historical S&P Prices'),
+    # dp.DataTable(data)
+        
+        
+)
+
+
+full_report.publish("Macro Daily Expected Ranges", open=True)
+
+dp.Text("Daily Expected Ranges: Macro Assets")
+print("Time to complete:", datetime.now() - start_time)
